@@ -10,10 +10,11 @@
 | **Pico (Aquisição)** | Determinação de Ângulos de Atitude (`Theta`, `Phi`) | Filtro Complementar (MPU6500) |
 | **Pico (Aquisição)** | Medição de Altitude e Velocidade | Altitude Barométrica (BME680) e Velocidade Calibrada (CAS) |
 | **Pico (Aquisição)** | Detecção de Estado de Voo | Lógica baseada em Altitude e Velocidade (ATT/DPL/LND) |
+| **Pi 4 (Gravação)** | Confiabilidade de Dados | Arquitetura multi-thread para leitura serial e escrita em disco (thread-safe buffering). |
 | **Pi 4 (Gravação)** | Registro de Dados | Salva dados brutos em `dados_planador.txt` no microSD/USB montado. |
 | **Pi 4 (Gravação)** | Visualização em Tempo Real | Gera vídeo `flight_overlay_video.mp4` com overlay HUD (alt, CAS, g-force, status, tempo) usando Picamera2 e OpenCV. |
-| **Integração** | Comunicação | Serial (USB/UART) para troca de dados `HUD` e `DATA`. |
-| **Integração** | Lógica de Voo | Aguarda condição de decolagem (`ZGPS > 0`) para iniciar a gravação. |
+| **Integração** | Lógica de Decolagem | Gravação iniciada somente após a condição de voo (`ZGPS > 0`) ser detectada. |
+| **Integração** | Condição de Parada | Para automaticamente após tempo mínimo (45s) ou por comando 'STOP' serial do Pico. |
 
 ## 📐 Arquitetura do Sistema
 
@@ -46,7 +47,7 @@ O projeto é dividido em dois sub-repositórios de código, correspondentes aos 
 **Software:**
 * **Linguagem:** Python.
 * **Bibliotecas:** `cv2` (OpenCV), `numpy`, `serial`, `picamera2`.
-* **Função:** Gerencia a comunicação Serial, captura *frames* de vídeo, desenha o *overlay* com os dados recebidos do Pico e salva os dados (`dados_planador.txt` e `flight_overlay_video.mp4`) no dispositivo de armazenamento.
+* **Função:** Gerencia a comunicação Serial, captura *frames* de vídeo em um ambiente potencialmente *headless* utilizando threads para garantir que a leitura de dados e a gravação em disco não bloqueiem a captura de vídeo. O script também desenha o *overlay* e salva os arquivos no dispositivo de armazenamento.
 
 ## ⚙️ Configuração e Instalação
 
@@ -56,35 +57,39 @@ Este projeto é configurado para ser compilado usando o **Raspberry Pi Pico SDK*
 
 1.  **Clone o Repositório:**
     ```bash
-    git clone https://github.com/JPSRaccolto/AeroChico.git
+    git clone https://github.com/JPSRaccolto/AeroChico
     cd AeroChico
     ```
-2.  **Instale o VS Code e Extensões:** Instale o [Visual Studio Code](https://code.visualstudio.com/) e as extensões recomendadas (listadas no arquivo `.vscode/extensions.json`), como a `Raspberry Pi Pico` e `C/C++ Extension Pack`.
+2.  **Instale o VS Code e Extensões:** Instale o [Visual Studio Code](https://code.visualstudio.com/) e as seguintes extensões recomendadas (listadas em `.vscode/extensions.json`):
+    * `Raspberry Pi Pico` (raspberry-pi.raspberry-pi-pico)
+    * `Cortex-Debug` (marus25.cortex-debug)
+    * `C/C++ Extension Pack` (ms-vscode.cpptools-extension-pack)
 3.  **Abra o Projeto no VS Code:**
     * No VS Code, vá em `File` > `Open Folder...` e selecione a pasta `aero_unificado`.
-    * A extensão Raspberry Pi Pico deve detectar automaticamente o projeto CMake. Se necessário, siga o prompt da extensão para configurar o SDK e a Toolchain.
-4.  **Configure e Compile (Build):**
-    * Pressione `Ctrl+Shift+P` (ou `Cmd+Shift+P`) e selecione **"CMake: Configure"**. Isso irá criar a pasta `build` e configurar o projeto.
-    * Para compilar, pressione `Ctrl+Shift+P` e selecione **"CMake: Build"** (ou use o botão "Build" na barra de status inferior). A compilação será executada usando o `ninja`.
+    * A extensão Raspberry Pi Pico irá guiar você na instalação da toolchain e do SDK (se ainda não estiverem configurados).
+4.  **Configure e Compile (Build) via VS Code:**
+    * Pressione `Ctrl+Shift+P` (ou `Cmd+Shift+P`) e selecione **"CMake: Configure"**. Isso irá configurar o projeto, criando a pasta `build` e usando o `Ninja` como gerador.
+    * Para compilar, pressione `Ctrl+Shift+P` e selecione **"CMake: Build"**.
 5.  **Upload (Flash):**
     * Coloque o Pico em modo BOOTSEL (segure o botão BOOTSEL e conecte ao PC).
-    * No VS Code, use o comando **"Raspberry Pi Pico: Flash"** (ou o comando de `tasks.json` se configurado) para carregar o firmware `aero_unificado.uf2`.
+    * No VS Code, use o comando **"Raspberry Pi Pico: Flash"** para carregar o firmware `aero_unificado.uf2`.
 
 #### 2. Módulo de Gravação (Raspberry Pi 4 Model B)
 
 1.  **Instale Dependências Python:**
     ```bash
-    # Instale o OpenCV (usado pelo picamera2 para o overlay)
+    # Atualizar e instalar OpenCV (dependência para vídeo/overlay)
     sudo apt update
     sudo apt install python3-opencv
     # Instale as bibliotecas Python
     pip install pyserial numpy picamera2
     ```
-2.  **Configuração do Armazenamento:** Verifique se o pendrive/microSD está montado no caminho esperado pelo script, conforme definido em `aero_pi4.py`:
+2.  **Configuração do Ambiente:** O script está preparado para rodar em ambientes *headless* (sem display).
+3.  **Configuração do Armazenamento:** Verifique se o pendrive/microSD está montado no caminho esperado pelo script, conforme definido em `aero_pi4.py`:
     ```python
     MICROSD_PATH = Path('/media/aerochico/AERO')
     ```
-3.  **Execução:** Conecte o Raspberry Pi Pico (com o firmware carregado) ao Pi 4 via USB e execute o script Python.
+4.  **Execução:** Conecte o Raspberry Pi Pico (com o firmware carregado) ao Pi 4 via USB (`/dev/ttyACM0`) e execute o script Python. A gravação só iniciará após o Pi 4 receber dados do Pico indicando que `ZGPS > 0`.
     ```bash
     python3 aero_pi4.py
     ```
