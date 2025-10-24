@@ -26,7 +26,7 @@ ARQUIVO_VIDEO = MICROSD_PATH / 'flight_overlay_video.mp4'
 
 # Configurações de vídeo
 VIDEO_WIDTH, VIDEO_HEIGHT = 640, 480
-FPS = 30
+FPS = 30 # Taxa de quadros de 30 FPS // Diminuir o FPS a medida que aumenta a qualidade do video
 
 # Mostrar preview do vídeo durante gravação?
 MOSTRAR_PREVIEW = True
@@ -36,7 +36,7 @@ CAMPOS = ["Tempo", "XGPS", "YGPS", "ZGPS", "Theta", "Phi"]
 UNIDADES = ["Segundos", "m", "m", "m", "deg", "deg"]
 
 # Tempo mínimo antes de permitir STOP
-MIN_TIME_STOP = 45
+MIN_TIME_STOP = 45 # Mantido em 45 segundos
 
 # Buffer para gravação em disco (tempo em ms)
 WRITE_INTERVAL_MS = 100  # Grava a cada 100ms
@@ -354,14 +354,20 @@ def aguardar_dados_iniciais(ser, picam2, data_buffer, hud_data, stop_event, stat
     print("AGUARDANDO CONDIÇÕES DE DECOLAGEM (ZGPS > 0)...")
     print("="*60)
 
-    temp_frame_count = 0
+    # temp_frame_count = 0 # Não é mais necessário
     timeout_start = time.time()
 
     while not stop_event.is_set():
         try:
             # Mostrar preview com overlay (opcional)
-            if MOSTRAR_PREVIEW and temp_frame_count % 5 == 0:
+            if MOSTRAR_PREVIEW:
+                # --------------------------------------------------------------
+                # MUDANÇA 1: Capturar *sempre*.
+                # Esta chamada agora bloqueia por 1/30s (pois a câmera
+                # está em modo vídeo), ditando o ritmo do loop.
                 frame = picam2.capture_array()
+                # --------------------------------------------------------------
+
                 # Pegar HUD atual se disponível
                 hud_atual = hud_data.get()
                 # Tentar obter ZGPS mais recente do buffer
@@ -390,8 +396,8 @@ def aguardar_dados_iniciais(ser, picam2, data_buffer, hud_data, stop_event, stat
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     print("Cancelado pelo usuário (q pressionado)")
                     return False
-
-            temp_frame_count += 1
+            
+            # temp_frame_count += 1 # Não é mais necessário
 
             # Checar se recebeu dados DATA suficientes para inspecionar ZGPS
             if stats['data_recebidas'] > 0:
@@ -409,14 +415,18 @@ def aguardar_dados_iniciais(ser, picam2, data_buffer, hud_data, stop_event, stat
 
             # Timeout opcional
             if time.time() - timeout_start > TIMEOUT_AGUARDA_ZGPS:
-                print("\n✗ Timeout: ZGPS não ultrapassou 0 dentro do tempo limite.")
+                print("\n✖ Timeout: ZGPS não ultrapassou 0 dentro do tempo limite.")
                 return False
 
-            time.sleep(0.05)
+            # --------------------------------------------------------------
+            # MUDANÇA 2: Remover o sleep manual.
+            # O ritmo é dado pelo bloqueio de picam2.capture_array()
+            # time.sleep(0.05) # REMOVIDO
+            # --------------------------------------------------------------
 
         except Exception as e:
             print(f"Erro aguardando ZGPS: {e}")
-            time.sleep(0.1)
+            time.sleep(0.1) # Manter sleep apenas em caso de erro
 
     return False
 
@@ -431,13 +441,20 @@ def main():
     # Inicializar câmera
     print("Inicializando câmera...")
     picam2 = Picamera2()
-    config = picam2.create_preview_configuration(
-        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "RGB888"}
+    
+    # ------------------------------------------------------------------
+    # MUDANÇA 3: Usar create_video_configuration e setar FrameRate
+    # Isso força a CÂMERA a gerar frames na taxa exata do VÍDEO.
+    config = picam2.create_video_configuration(
+        main={"size": (VIDEO_WIDTH, VIDEO_HEIGHT), "format": "RGB888"},
+        controls={"FrameRate": FPS}
     )
+    # ------------------------------------------------------------------
+    
     picam2.configure(config)
     picam2.start()
     time.sleep(2)
-    print("✔ Câmera inicializada")
+    print(f"✔ Câmera inicializada (Modo Vídeo @ {FPS} FPS)")
 
     # Estruturas thread-safe
     data_buffer = FlightDataBuffer()
@@ -466,6 +483,7 @@ def main():
             thread_serial.start()
 
             # Aguardar dados iniciais (agora aguarda ZGPS > 0)
+            # Esta função foi ajustada para rodar com a câmera em modo vídeo
             if not aguardar_dados_iniciais(ser, picam2, data_buffer, hud_data, stop_event, stats):
                 print("\nGravação cancelada (sem decolagem).")
                 stop_event.set()
@@ -509,21 +527,34 @@ def main():
             frame_count = 0
             last_stats_time = time.time()
 
+            # ------------------------------------------------------------------
+            # MUDANÇA 4: REMOVIDO O CONTROLE DE TEMPO MANUAL (next_frame_time)
+            # O loop agora depende do bloqueio de picam2.capture_array()
+            # ------------------------------------------------------------------
+
             while True:
                 elapsed = time.time() - start_time
-                frame_start = time.time()
 
-                # Parar após MIN_TIME_STOP OU se receber STOP do Pico
-                if elapsed >= MIN_TIME_STOP:
-                    if stats['stop_recebido']:
+                # Parar após MIN_TIME_STOP E se receber STOP do Pico
+                if stats['stop_recebido']:
+                    if elapsed >= MIN_TIME_STOP:
                         print(f"\n✔ STOP recebido após {elapsed:.1f}s")
-                    else:
-                        print(f"\n✔ Tempo mínimo ({MIN_TIME_STOP}s) atingido, parando automaticamente")
+                        break
+                    # Se recebeu STOP, continua rodando até atingir o tempo mínimo
+                
+                # Parar se atingir MIN_TIME_STOP e o STOP NÃO for recebido
+                if elapsed >= MIN_TIME_STOP and not stats['stop_recebido']:
+                    print(f"\n✔ Tempo mínimo ({MIN_TIME_STOP}s) atingido, parando automaticamente.")
                     break
 
-                # Capturar frame com overlay
+
+                # 1. Capturar frame com overlay
                 try:
+                    # --------------------------------------------------------------
+                    # MUDANÇA 5: Esta chamada agora bloqueia por 1/30s
                     frame = picam2.capture_array()
+                    # --------------------------------------------------------------
+                    
                     hud_atual = hud_data.get()
                     frame_with_overlay = draw_overlay(frame, hud_atual)
                     out.write(frame_with_overlay)
@@ -547,17 +578,17 @@ def main():
                           f"Buffer: {data_buffer.size()} | "
                           f"Offset: {time_offset:.3f}s")
                     last_stats_time = time.time()
+                
+                # --------------------------------------------------------------
+                # MUDANÇA 6: Garantir que não há NENHUM time.sleep()
+                # --------------------------------------------------------------
 
-                # Controlar FPS - SEM ATRASO EXCESSIVO
-                frame_time = time.time() - frame_start
-                sleep_time = max(0.001, (1/FPS) - frame_time)
-                time.sleep(sleep_time)
 
     except KeyboardInterrupt:
         print("\n✔ Interrompido pelo usuário")
 
     except Exception as e:
-        print(f"\n✗ Erro: {e}")
+        print(f"\n✖ Erro: {e}")
 
     finally:
         print("\n" + "="*50)
@@ -568,10 +599,13 @@ def main():
         stop_event.set()
 
         # Aguardar thread de disco finalizar (importante!)
-        time.sleep(0.5)
+        # O tempo de espera é importante para que o flush final ocorra
+        if 'thread_disco' in locals() and thread_disco.is_alive():
+            thread_disco.join(timeout=2) # Espera no máximo 2s
 
         # Fechar recursos
-        picam2.stop()
+        if 'picam2' in locals():
+            picam2.stop()
         if 'out' in locals():
             out.release()
         cv2.destroyAllWindows()
@@ -584,7 +618,9 @@ def main():
             print(f"  - Tempo total: {elapsed_total:.1f}s")
             print(f"  - Amostras DATA salvas: {total_amostras}")
             print(f"  - Frames vídeo: {frame_count}")
-            print(f"  - Taxa média: {total_amostras/elapsed_total:.1f} Hz (esperado: 50 Hz)")
+            # A taxa média é calculada sobre o total escrito pelo tempo total
+            if elapsed_total > 0:
+                print(f"  - Taxa média (Dados): {total_amostras/elapsed_total:.1f} Hz (esperado: 50 Hz)")
             print(f"  - Dados: {ARQUIVO_DADOS}")
             print(f"  - Vídeo: {ARQUIVO_VIDEO}")
 
